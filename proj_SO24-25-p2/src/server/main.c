@@ -282,7 +282,8 @@ static void dispatch_threads(DIR* dir) {
   free(threads);
 }
 
-void send_answer(char *response_pipename, int status) {
+
+void send_answer(char *response_pipename, int status, char OP_CODE) {
   int response_fd = open(response_pipename, O_WRONLY);
   if (response_fd < 0) {
     fprintf(stderr, "Failed to open response FIFO: %s\n", strerror(errno));
@@ -291,7 +292,7 @@ void send_answer(char *response_pipename, int status) {
 
   size_t offset = 0;
   size_t message_size = 2;
-  char opcode = OP_CODE_CONNECT;
+  char opcode = OP_CODE;
   char r_status = (char)status;
   char response[2];
   create_message(response, &offset, &opcode, sizeof(char));
@@ -301,6 +302,55 @@ void send_answer(char *response_pipename, int status) {
   }
   close(response_fd);
   
+}
+
+
+
+void handle_requests(client_t *client){
+  while (1) {
+    int request_fd = open(client->request_pipename, O_RDONLY);
+    if (request_fd < 0) {
+      fprintf(stderr, "Failed to open request FIFO: %s\n", strerror(errno));
+      return;
+    }
+    char opcode;
+    while (1) {
+      if(read_all(request_fd, &opcode, sizeof(char), NULL) == 0){
+        break; // Failed to get an opcode
+      }
+
+      switch (opcode) {
+      /*  case OP_CODE_CONNECT:
+          new_client_connection();
+          break; */
+        case OP_CODE_DISCONNECT:
+
+          // TODO: Delete client subscriptions that still exist
+          send_answer(client->response_pipename, 0, OP_CODE_DISCONNECT);
+          printf("Client disconnected\n");
+          break;
+
+        case OP_CODE_SUBSCRIBE:
+          printf("Client subscribed\n");
+          break;
+
+        case OP_CODE_UNSUBSCRIBE:
+          printf("Client unsubscribed\n");
+          break;
+
+        default:
+          fprintf(stderr, "Default.\n");
+          break;
+
+      }
+
+      if (opcode == OP_CODE_DISCONNECT) {
+        break;
+      }
+    }
+    close(request_fd);
+    free(client);
+  }
 }
 
 
@@ -331,13 +381,15 @@ int new_client_connection() {
   }
 
   if (error_status) {
-    send_answer(client->response_pipename, 1);
+    send_answer(client->response_pipename, 1, OP_CODE_CONNECT);
     return 1;
+
   } else {
     strcpy(client->request_pipename, client_request_pipename);
     strcpy(client->response_pipename, client_response_pipename);
     strcpy(client->notification_pipename, client_notification_pipename);
-    send_answer(client->response_pipename, 0);
+    send_answer(client->response_pipename, 0, OP_CODE_CONNECT);
+    handle_requests(client);
     return 0;
   }
 
@@ -362,7 +414,7 @@ void *server_fifo_handler(){
       close(server_fd);
     }
 
-    printf("New client connection successful!\n");
+    printf("Client is now disconnected.\n");
   }
 }
 
