@@ -52,28 +52,10 @@ int kvs_connect(char const* req_pipe_path, char const* resp_pipe_path, char cons
     return 1;
   }
 
-  // Open client pipes
-  req_fd = open(req_pipe, O_WRONLY);
-  resp_fd = open(resp_pipe, O_RDONLY);
-  notif_fd = open(notification_pipe, O_RDONLY);
-
-  // Ifs not together because we want to see which pipe failed to open for debugging purposes
-  if (req_fd < 0) {
-    fprintf(stderr, "Error opening request pipe: %s\n", req_pipe);
-    close(server_fd);
-    return 1;
-  }
-  if (resp_fd < 0) {
-    fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
-    close(server_fd);
-    return 1;
-  }
-
-  if (notif_fd < 0) {
-    fprintf(stderr, "Error opening notification pipe: %s\n", notification_pipe);
-    close(server_fd);
-    return 1;
-  }
+  printf("Server pipe opened\n");
+  printf("Request pipe: %s\n", req_pipe);
+  printf("Response pipe: %s\n", resp_pipe);
+  printf("Notification pipe: %s\n", notification_pipe);
 
   // Send connect message
 
@@ -81,7 +63,7 @@ int kvs_connect(char const* req_pipe_path, char const* resp_pipe_path, char cons
 
   char op_code = OP_CODE_CONNECT;
   size_t offset = 0;
-  size_t request_len = sizeof(char) + sizeof(char) * MAX_PIPE_PATH_LENGTH * sizeof(char) * MAX_PIPE_PATH_LENGTH * sizeof(char) * MAX_PIPE_PATH_LENGTH;
+  size_t request_len = sizeof(char) + (MAX_PIPE_PATH_LENGTH * sizeof(char)) * 3;
   char request[request_len];
   memset(request, 0, request_len);
 
@@ -95,9 +77,7 @@ int kvs_connect(char const* req_pipe_path, char const* resp_pipe_path, char cons
   create_message(request, &offset, &resp_pipe, MAX_PIPE_PATH_LENGTH * sizeof(char));
   create_message(request, &offset, &notification_pipe, MAX_PIPE_PATH_LENGTH * sizeof(char));
 
-  printf("Message: %s\n", request);
-
-  if(write_all(server_fd, request, request_len) != 1) {
+  if(write_all(server_fd, &request, request_len) != 1) {
     fprintf(stderr, "Failed to send connect message to server\n");
     close(server_fd);
     return 1;
@@ -106,6 +86,15 @@ int kvs_connect(char const* req_pipe_path, char const* resp_pipe_path, char cons
 
   // Wait for response
   // Response type: (char) OP_CODE=1 | (char) result
+  // We also have to open the response pipe first
+
+  resp_fd = open(resp_pipe, O_RDONLY);
+  if (resp_fd < 0) {
+    fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
+    return 1;
+  }
+  printf("Response pipe opened\n");
+
   char response[2];
   if (read_all(resp_fd, response, 2, NULL) != 1) {
     fprintf(stderr, "Failed to read response from server\n");

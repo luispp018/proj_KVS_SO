@@ -282,6 +282,90 @@ static void dispatch_threads(DIR* dir) {
   free(threads);
 }
 
+void send_answer(char *response_pipename, int status) {
+  int response_fd = open(response_pipename, O_WRONLY);
+  if (response_fd < 0) {
+    fprintf(stderr, "Failed to open response FIFO: %s\n", strerror(errno));
+    return;
+  }
+
+  size_t offset = 0;
+  size_t message_size = 2;
+  char opcode = OP_CODE_CONNECT;
+  char r_status = (char)status;
+  char response[2];
+  create_message(response, &offset, &opcode, sizeof(char));
+  create_message(response, &offset, &r_status, sizeof(char));
+  if (write_all(response_fd, response, message_size) == -1) {
+    fprintf(stderr, "Failed to write to response FIFO: %s\n", strerror(errno));
+  }
+  close(response_fd);
+  
+}
+
+
+int new_client_connection() {
+  printf("New client connection\n");
+  client_t *client = (client_t *)malloc(sizeof(client_t));
+  int error_status = 0;
+
+  char client_request_pipename[MAX_PIPE_PATH_LENGTH];
+  if(read_all(server_fd, client_request_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
+    fprintf(stderr, "Failed to read from server FIFO\n");
+    free(client);
+    error_status = 1;
+  }
+
+  char client_response_pipename[MAX_PIPE_PATH_LENGTH];
+  if(read_all(server_fd, client_response_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
+    fprintf(stderr, "Failed to read from server FIFO\n");
+    free(client);
+    error_status = 1;
+  }
+
+  char client_notification_pipename[MAX_PIPE_PATH_LENGTH];
+  if(read_all(server_fd, client_notification_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
+    fprintf(stderr, "Failed to read from server FIFO\n");
+    free(client);
+    error_status = 1;
+  }
+
+  if (error_status) {
+    send_answer(client->response_pipename, 1);
+    return 1;
+  } else {
+    strcpy(client->request_pipename, client_request_pipename);
+    strcpy(client->response_pipename, client_response_pipename);
+    strcpy(client->notification_pipename, client_notification_pipename);
+    send_answer(client->response_pipename, 0);
+    return 0;
+  }
+
+}
+
+void *server_fifo_handler(){
+  printf("Server FIFO handler\n");
+  while (1) {
+    char opcode;
+    if(read_all(server_fd, &opcode, sizeof(char), NULL) == 0){
+      continue; // it could not get an opcode, so it will try again
+    }
+
+    if(opcode != OP_CODE_CONNECT){
+      printf("Failed to read from server FIFO: Invalid opcode\n");
+      continue; // it is not a connect opcode, so it will try again
+    }
+
+    if(new_client_connection(NULL) == 1){
+      fprintf(stderr, "Failed to create new client connection\n");
+      unlink(server_pipename);
+      close(server_fd);
+    }
+
+    printf("New client connection successful!\n");
+  }
+}
+
 
 int main(int argc, char** argv) {
   if (argc < 4) {
@@ -331,6 +415,9 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+
+  // SERVER FIFO HANDLING
+  
   strncat(server_pipename, argv[4], 256 - strlen(server_pipename) - 1);
   printf("Server pipename: %s\n", server_pipename);
   // Create server FIFO
@@ -341,7 +428,30 @@ int main(int argc, char** argv) {
   }
   fprintf(stdout, "The server has been initialized with pipename: %s\n", server_pipename);
 
+  server_fd = open(server_pipename, O_RDONLY);
+  if (server_fd < 0) {
+    fprintf(stderr, "Failed to open server FIFO: %s\n", strerror(errno));
+    kvs_terminate();
+    close(server_fd);
+    unlink(server_pipename);
+    return 1;
+  }
+
+  // The handling of the server FIFO should be done in a separate thread
+  pthread_t server_thread;
+  if (pthread_create(&server_thread, NULL, server_fifo_handler, NULL) != 0) {
+    fprintf(stderr, "Failed to create server thread\n");
+    kvs_terminate();
+    return 1;
+  }
+
   dispatch_threads(dir);
+
+  if (pthread_join(server_thread, NULL) != 0) {
+    fprintf(stderr, "Failed to join server thread\n");
+    kvs_terminate();
+    return 1;
+  }
 
   if (closedir(dir) == -1) {
     fprintf(stderr, "Failed to close directory\n");

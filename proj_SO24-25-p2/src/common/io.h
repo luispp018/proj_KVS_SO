@@ -2,6 +2,15 @@
 #define COMMON_IO_H
 
 #include <stddef.h>
+#include "constants.h"
+
+
+typedef struct {
+    char request_pipename[MAX_PIPE_PATH_LENGTH];
+    char response_pipename[MAX_PIPE_PATH_LENGTH];
+    char notification_pipename[MAX_PIPE_PATH_LENGTH];
+    int client_id;
+} client_t;
 
 /// Reads a given number of bytes from a file descriptor. Will block until all
 /// bytes are read, or fail if not all bytes could be read.
