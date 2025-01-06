@@ -331,10 +331,19 @@ void handle_requests(client_t *client){
           break;
 
         case OP_CODE_SUBSCRIBE:
+          // TODO: Initialize client subscription.
+          // Draft:
+          // kvs_subscribe_init(client->notification_pipename);
+          // int sub_result = kvs_subscribe(key);
+          // send_answer(client->response_pipename, sub_result, OP_CODE_SUBSCRIBE);
           printf("Client subscribed\n");
           break;
 
         case OP_CODE_UNSUBSCRIBE:
+          // TODO: Unsubscribe client from key.
+          // Draft:
+          // int unsub_result = kvs_unsubscribe(key);
+          // send_answer(client->response_pipename, unsub_result, OP_CODE_UNSUBSCRIBE);
           printf("Client unsubscribed\n");
           break;
 
