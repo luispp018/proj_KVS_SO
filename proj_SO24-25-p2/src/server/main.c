@@ -327,7 +327,7 @@ void handle_requests(client_t *client){
 
           // TODO: Delete client subscriptions that still exist
           send_answer(client->response_pipename, 0, OP_CODE_DISCONNECT);
-          printf("Client disconnected\n");
+          printf("Client disconnected.\n");
           break;
 
         case OP_CODE_SUBSCRIBE:
@@ -362,26 +362,24 @@ int new_client_connection() {
   char client_request_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_request_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
     fprintf(stderr, "Failed to read from server FIFO\n");
-    free(client);
     error_status = 1;
   }
 
   char client_response_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_response_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
     fprintf(stderr, "Failed to read from server FIFO\n");
-    free(client);
     error_status = 1;
   }
 
   char client_notification_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_notification_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
     fprintf(stderr, "Failed to read from server FIFO\n");
-    free(client);
     error_status = 1;
   }
 
   if (error_status) {
     send_answer(client->response_pipename, 1, OP_CODE_CONNECT);
+    free(client);
     return 1;
 
   } else {

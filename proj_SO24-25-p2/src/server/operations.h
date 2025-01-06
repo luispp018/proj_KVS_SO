@@ -2,7 +2,17 @@
 #define KVS_OPERATIONS_H
 
 #include <stddef.h>
+#include <stdbool.h>
 #include "constants.h"
+#include "../common/constants.h"
+
+
+typedef struct {
+    char key[MAX_STRING_SIZE];
+    char notif_pipe[MAX_PIPE_PATH_LENGTH];
+    bool active;
+} Subscription;
+
 
 /// Initializes the KVS state.
 /// @return 0 if the KVS state was initialized successfully, 1 otherwise.
@@ -59,5 +69,25 @@ void set_n_current_backups(int _n_current_backups);
 // Getter for n_current_backups
 // @return n_current_backups
 int get_n_current_backups();
+
+
+/// Initializes the subscription system
+/// @param notif_pipe_name Name of the notification pipe.
+void kvs_subscribe_init(char *notif_pipe_name);
+
+/// Subscribes to a key.
+/// @param key Key to subscribe to.
+/// @return 1 if the subscription was successful, 0 otherwise.
+int kvs_subscribe(const char* key);
+
+/// Unsubscribes from a key.
+/// @param key Key to unsubscribe from.
+/// @return 1 if the unsubscription was successful, 0 otherwise.
+int kvs_unsubscribe(const char* key);
+
+/// Notifies all subscribers of a key.
+/// @param key Key to notify subscribers of.
+/// @param value Value of the key.
+void notify_subscribers(const char* key, const char* value);
 
 #endif  // KVS_OPERATIONS_H

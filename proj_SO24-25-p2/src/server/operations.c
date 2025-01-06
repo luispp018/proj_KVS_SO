@@ -7,12 +7,20 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "constants.h"
 #include "io.h"
 #include "kvs.h"
+#include "../common/constants.h"
+#include "../common/io.h"
 
 static struct HashTable *kvs_table = NULL;
+
+static Subscription subscriptions[MAX_NUMBER_SUB];
+static pthread_rwlock_t subscriptions_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+
 
 /// Calculates a timespec from a delay in milliseconds.
 /// @param delay_ms Delay in milliseconds.
@@ -54,6 +62,8 @@ int kvs_write(size_t num_pairs, char keys[][MAX_STRING_SIZE],
   for (size_t i = 0; i < num_pairs; i++) {
     if (write_pair(kvs_table, keys[i], values[i]) != 0) {
       fprintf(stderr, "Failed to write key pair (%s,%s)\n", keys[i], values[i]);
+    } else {
+      notify_subscribers(keys[i], values[i]);
     }
   }
 
@@ -105,6 +115,8 @@ int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE], int fd) {
       char str[MAX_STRING_SIZE];
       snprintf(str, MAX_STRING_SIZE, "(%s,KVSMISSING)", keys[i]);
       write_str(fd, str);
+    } else {
+      notify_subscribers(keys[i], NULL);
     }
   }
   if (aux) {
@@ -180,4 +192,93 @@ int kvs_backup(size_t num_backup, char *job_filename, char *directory) {
 void kvs_wait(unsigned int delay_ms) {
   struct timespec delay = delay_to_timespec(delay_ms);
   nanosleep(&delay, NULL);
+}
+
+
+// Initializes the subscription system
+void kvs_subscribe_init(char *notif_pipe_name) {
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        subscriptions[i].active = false;
+        strcpy(subscriptions[i].notif_pipe, notif_pipe_name);
+    }
+}
+
+
+int kvs_subscribe(const char* key) {
+
+    pthread_rwlock_wrlock(&subscriptions_lock);
+
+    // Check if the key exists
+    char *result = read_pair(kvs_table, key);
+    if (result == NULL) {
+        pthread_rwlock_unlock(&subscriptions_lock);
+        fprintf(stderr, "Key does not exist in the kvs table: %s\n", key);
+        return 0; // Key does not exist
+    }
+
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        if (!subscriptions[i].active) {
+            strcpy(subscriptions[i].key, key);
+            subscriptions[i].active = true;
+            pthread_rwlock_unlock(&subscriptions_lock);
+            return 1;
+        }
+    }
+
+    pthread_rwlock_unlock(&subscriptions_lock);
+
+    return 0; // No more space for subscriptions
+
+}
+
+
+int kvs_unsubscribe(const char* key) {
+
+    pthread_rwlock_wrlock(&subscriptions_lock);
+
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        if (subscriptions[i].active && strcmp(subscriptions[i].key, key) == 0) {
+            subscriptions[i].active = false;
+            pthread_rwlock_unlock(&subscriptions_lock);
+            return 0;
+        }
+    }
+
+    pthread_rwlock_unlock(&subscriptions_lock);
+
+    return 1; // Subscription not found
+}
+
+void notify_subscribers(const char* key, const char* value) {
+    pthread_rwlock_rdlock(&subscriptions_lock);
+
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        if (subscriptions[i].active && strcmp(subscriptions[i].key, key) == 0) {
+            int notif_fd = open(subscriptions[i].notif_pipe, O_WRONLY);
+            if (notif_fd < 0) {
+                fprintf(stderr, "Failed to open notification pipe: %s\n", subscriptions[i].key);
+                continue;
+            }
+
+            // Message type: (<key>, <value>)
+            size_t offset = 0;
+            char message[42];
+            if(value) {
+                snprintf(message, 42, "(%s,%s)", key, value);
+            } else {
+                snprintf(message, 42, "(%s,DELETED)", key);
+            }
+            size_t message_len = strlen(message);
+            char n_message[message_len];
+            memset(n_message, 0, message_len);
+
+            create_message(n_message, &offset, message, message_len);
+            if (write_all(notif_fd, n_message, offset) != 1) {
+                fprintf(stderr, "Failed to write to notification pipe: %s\n", subscriptions[i].key);
+            }
+            close(notif_fd);
+        }
+    }
+
+    pthread_rwlock_unlock(&subscriptions_lock);
 }
