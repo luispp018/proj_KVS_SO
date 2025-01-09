@@ -172,14 +172,112 @@ int kvs_disconnect(void) {
 
 int kvs_subscribe(const char* key) {
   printf("Subscribing to key: %s\n", key);
-  // send subscribe message to request pipe and wait for response in response pipe
-  return 0;
+  
+  char op_code = OP_CODE_SUBSCRIBE;
+  size_t offset = 0;
+  size_t request_len = sizeof(char) + 41 * sizeof(char);  // op_code + fixed key size
+  char request[request_len];
+  memset(request, 0, request_len);
+  
+  // Create message: (char) OP_CODE=3 | char[41] key
+  create_message(request, &offset, &op_code, sizeof(char));
+  
+  // Copy key with padding if needed
+  char padded_key[41] = {0};  // 40 chars + null terminator
+  strncpy(padded_key, key, 40);
+  create_message(request, &offset, padded_key, 41 * sizeof(char));
+  
+  // Send request
+  req_fd = open(req_pipe, O_WRONLY);
+  if (req_fd < 0) {
+    fprintf(stderr, "Error opening request pipe: %s\n", req_pipe);
+    return 1;
+  }
+  
+  if (write_all(req_fd, request, request_len) != 1) {
+    fprintf(stderr, "Failed to send subscribe message to server\n");
+    close(req_fd);
+    return 1;
+  }
+  close(req_fd);
+  
+  // Wait for response: (char) OP_CODE=3 | (char) result
+  char response[2];
+  resp_fd = open(resp_pipe, O_RDONLY);
+  if (resp_fd < 0) {
+    fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
+    return 1;
+  }
+  
+  if (read_all(resp_fd, response, 2, NULL) != 1) {
+    fprintf(stderr, "Failed to read response from server\n");
+    close(resp_fd);
+    return 1;
+  }
+  
+  if (response[0] != OP_CODE_SUBSCRIBE) {
+    fprintf(stderr, "Unexpected response from server\n");
+    close(resp_fd);
+    return 1;
+  }
+  close(resp_fd);
+  
+  printf("Server returned %d for operation: SUBSCRIBE\n", response[1]);
+  return response[1];
 }
 
 int kvs_unsubscribe(const char* key) {
   printf("Unsubscribing from key: %s\n", key);
-    // send unsubscribe message to request pipe and wait for response in response pipe
-  return 0;
+  
+  char op_code = OP_CODE_UNSUBSCRIBE;
+  size_t offset = 0;
+  size_t request_len = sizeof(char) + 41 * sizeof(char);  // op_code + fixed key size
+  char request[request_len];
+  memset(request, 0, request_len);
+  
+  // Create message: (char) OP_CODE=4 | char[41] key
+  create_message(request, &offset, &op_code, sizeof(char));
+  
+  // Copy key with padding if needed
+  char padded_key[41] = {0};  // 40 chars + null terminator
+  strncpy(padded_key, key, 40);
+  create_message(request, &offset, padded_key, 41 * sizeof(char));
+  
+  // Send request
+  req_fd = open(req_pipe, O_WRONLY);
+  if (req_fd < 0) {
+    fprintf(stderr, "Error opening request pipe: %s\n", req_pipe);
+    return 1;
+  }
+  
+  if (write_all(req_fd, request, request_len) != 1) {
+    fprintf(stderr, "Failed to send unsubscribe message to server\n");
+    close(req_fd);
+    return 1;
+  }
+  close(req_fd);
+  
+  // Wait for response: (char) OP_CODE=4 | (char) result
+  char response[2];
+  resp_fd = open(resp_pipe, O_RDONLY);
+  if (resp_fd < 0) {
+    fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
+    return 1;
+  }
+  
+  if (read_all(resp_fd, response, 2, NULL) != 1) {
+    fprintf(stderr, "Failed to read response from server\n");
+    close(resp_fd);
+    return 1;
+  }
+  
+  if (response[0] != OP_CODE_UNSUBSCRIBE) {
+    fprintf(stderr, "Unexpected response from server\n");
+    close(resp_fd);
+    return 1;
+  }
+  close(resp_fd);
+  
+  printf("Server returned %d for operation: UNSUBSCRIBE\n", response[1]);
+  return response[1];
 }
-
-
