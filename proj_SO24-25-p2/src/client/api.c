@@ -176,52 +176,52 @@ int kvs_subscribe(const char* key) {
   char op_code = OP_CODE_SUBSCRIBE;
   size_t offset = 0;
   size_t request_len = sizeof(char) + 41 * sizeof(char);  // op_code + fixed key size
-  char request[request_len];
-  memset(request, 0, request_len);
+  char request[request_len];  // 1 byte for op_code + 41 bytes for key
+  memset(request, 0, request_len);  // zero out the buffer
   
   // Create message: (char) OP_CODE=3 | char[41] key
   create_message(request, &offset, &op_code, sizeof(char));
   
   // Copy key with padding if needed
   char padded_key[41] = {0};  // 40 chars + null terminator
-  strncpy(padded_key, key, 40);
-  create_message(request, &offset, padded_key, 41 * sizeof(char));
+  strncpy(padded_key, key, 40); // copy key to padded_key
+  create_message(request, &offset, padded_key, 41 * sizeof(char));  // copy padded_key to request
   
   // Send request
   req_fd = open(req_pipe, O_WRONLY);
-  if (req_fd < 0) {
+  if (req_fd < 0) { // check if the file descriptor is valid
     fprintf(stderr, "Error opening request pipe: %s\n", req_pipe);
     return 1;
   }
   
-  if (write_all(req_fd, request, request_len) != 1) {
-    fprintf(stderr, "Failed to send subscribe message to server\n");
-    close(req_fd);
-    return 1;
+  if (write_all(req_fd, request, request_len) != 1) { //  verify if the message can be written to the file descriptor 
+    fprintf(stderr, "Failed to send subscribe message to server\n");  
+    close(req_fd);  
+    return 1; 
   }
   close(req_fd);
   
   // Wait for response: (char) OP_CODE=3 | (char) result
   char response[2];
   resp_fd = open(resp_pipe, O_RDONLY);
-  if (resp_fd < 0) {
+  if (resp_fd < 0) {  // check if the file descriptor is valid
     fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
     return 1;
   }
   
-  if (read_all(resp_fd, response, 2, NULL) != 1) {
+  if (read_all(resp_fd, response, 2, NULL) != 1) {  //  verify if the message can be read from the file descriptor
     fprintf(stderr, "Failed to read response from server\n");
     close(resp_fd);
     return 1;
   }
   
-  if (response[0] != OP_CODE_SUBSCRIBE) {
+  if (response[0] != OP_CODE_SUBSCRIBE) { // check if the response is valid
     fprintf(stderr, "Unexpected response from server\n");
     close(resp_fd);
     return 1;
   }
   close(resp_fd);
-  
+  // print the response
   printf("Server returned %d for operation: SUBSCRIBE\n", response[1]);
   return response[1];
 }
@@ -229,28 +229,28 @@ int kvs_subscribe(const char* key) {
 int kvs_unsubscribe(const char* key) {
   printf("Unsubscribing from key: %s\n", key);
   
-  char op_code = OP_CODE_UNSUBSCRIBE;
-  size_t offset = 0;
+  char op_code = OP_CODE_UNSUBSCRIBE; 
+  size_t offset = 0;  
   size_t request_len = sizeof(char) + 41 * sizeof(char);  // op_code + fixed key size
-  char request[request_len];
-  memset(request, 0, request_len);
+  char request[request_len];  // 1 byte for op_code + 41 bytes for key
+  memset(request, 0, request_len);  // zero out the buffer
   
   // Create message: (char) OP_CODE=4 | char[41] key
   create_message(request, &offset, &op_code, sizeof(char));
   
   // Copy key with padding if needed
   char padded_key[41] = {0};  // 40 chars + null terminator
-  strncpy(padded_key, key, 40);
-  create_message(request, &offset, padded_key, 41 * sizeof(char));
+  strncpy(padded_key, key, 40); // copy key to padded_key
+  create_message(request, &offset, padded_key, 41 * sizeof(char));  // copy padded_key to request
   
   // Send request
   req_fd = open(req_pipe, O_WRONLY);
-  if (req_fd < 0) {
+  if (req_fd < 0) { // check if the file descriptor is valid
     fprintf(stderr, "Error opening request pipe: %s\n", req_pipe);
     return 1;
   }
   
-  if (write_all(req_fd, request, request_len) != 1) {
+  if (write_all(req_fd, request, request_len) != 1) { //  verify if the message can be written to the file descriptor
     fprintf(stderr, "Failed to send unsubscribe message to server\n");
     close(req_fd);
     return 1;
@@ -260,18 +260,18 @@ int kvs_unsubscribe(const char* key) {
   // Wait for response: (char) OP_CODE=4 | (char) result
   char response[2];
   resp_fd = open(resp_pipe, O_RDONLY);
-  if (resp_fd < 0) {
+  if (resp_fd < 0) {  // check if the file descriptor is valid
     fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
     return 1;
   }
   
-  if (read_all(resp_fd, response, 2, NULL) != 1) {
+  if (read_all(resp_fd, response, 2, NULL) != 1) {  //  verify if the message can be read from the file descriptor
     fprintf(stderr, "Failed to read response from server\n");
     close(resp_fd);
     return 1;
   }
   
-  if (response[0] != OP_CODE_UNSUBSCRIBE) {
+  if (response[0] != OP_CODE_UNSUBSCRIBE) { // check if the response is valid
     fprintf(stderr, "Unexpected response from server\n");
     close(resp_fd);
     return 1;
