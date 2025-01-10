@@ -85,6 +85,10 @@ int kvs_subscribe(const char* key);
 /// @return 1 if the unsubscription was successful, 0 otherwise.
 int kvs_unsubscribe(const char* key);
 
+/// Unsubscribes from all keys.
+/// @return 0 if the unsubscription was successful, 1 otherwise.
+int kvs_unsubscribe_all();
+
 /// Notifies all subscribers of a key.
 /// @param key Key to notify subscribers of.
 /// @param value Value of the key.

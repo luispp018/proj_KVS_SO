@@ -306,61 +306,72 @@ void send_answer(char *response_pipename, int status, char OP_CODE) {
 
 
 
-void handle_requests(client_t *client){
+void handle_requests(client_t *client) {
+  int request_fd = open(client->request_pipename, O_RDONLY);
+  if (request_fd < 0) {
+    fprintf(stderr, "Failed to open client request pipe: %s\n", client->request_pipename);
+    free(client);
+    return;
+  }
+
   while (1) {
-    int request_fd = open(client->request_pipename, O_RDONLY);
-    if (request_fd < 0) {
-      fprintf(stderr, "Failed to open request FIFO: %s\n", strerror(errno));
+    char opcode;
+    if (read_all(request_fd, &opcode, sizeof(char), NULL) == 0) {
+      fprintf(stderr, "Failed to read opcode from request pipe\n");
+      close(request_fd);
+      free(client);
       return;
     }
-    char opcode;
-    while (1) {
-      if(read_all(request_fd, &opcode, sizeof(char), NULL) == 0){
-        break; // Failed to get an opcode
+
+    switch (opcode) {
+      case OP_CODE_DISCONNECT: {
+        kvs_unsubscribe_all();
+        send_answer(client->response_pipename, 0, OP_CODE_DISCONNECT);
+        close(request_fd);
+        free(client);
+        printf("Client disconnected.\n");
+        return;
       }
 
-      switch (opcode) {
-      /*  case OP_CODE_CONNECT:
-          new_client_connection();
-          break; */
-        case OP_CODE_DISCONNECT:
+      case OP_CODE_SUBSCRIBE: {
 
-          // TODO: Delete client subscriptions that still exist
-          send_answer(client->response_pipename, 0, OP_CODE_DISCONNECT);
-          printf("Client disconnected.\n");
-          break;
-
-        case OP_CODE_SUBSCRIBE:
-          // TODO: Initialize client subscription.
-          // Draft:
-          // kvs_subscribe_init(client->notification_pipename);
-          // int sub_result = kvs_subscribe(key);
-          // send_answer(client->response_pipename, sub_result, OP_CODE_SUBSCRIBE);
-          printf("Client subscribed\n");
-          break;
-
-        case OP_CODE_UNSUBSCRIBE:
-          // TODO: Unsubscribe client from key.
-          // Draft:
-          // int unsub_result = kvs_unsubscribe(key);
-          // send_answer(client->response_pipename, unsub_result, OP_CODE_UNSUBSCRIBE);
-          printf("Client unsubscribed\n");
-          break;
-
-        default:
-          fprintf(stderr, "Default.\n");
-          break;
-
-      }
-
-      if (opcode == OP_CODE_DISCONNECT) {
+        char key[41];
+        if (read_all(request_fd, key, 41, NULL) == 0) {
+          fprintf(stderr, "Failed to read key from request FIFO\n");
+          close(request_fd);
+          free(client);
+          return;
+        }
+        if (!client->has_subscribed) {
+          kvs_subscribe_init(client->notification_pipename);
+          client->has_subscribed = true;
+        }
+        int sub_result = kvs_subscribe(key);
+        send_answer(client->response_pipename, sub_result, OP_CODE_SUBSCRIBE);
         break;
       }
+
+      case OP_CODE_UNSUBSCRIBE: {
+
+        char key[41];
+        if (read_all(request_fd, key, 41, NULL) == 0) {
+          fprintf(stderr, "Failed to read key from request FIFO\n");
+          close(request_fd);
+          free(client);
+          return;
+        }
+        int unsub_result = kvs_unsubscribe(key);
+        send_answer(client->response_pipename, unsub_result, OP_CODE_UNSUBSCRIBE);
+        break;
+      }
+
+      default:
+        fprintf(stderr, "Unknown opcode: %d\n", opcode);
+        break;
     }
-    close(request_fd);
-    free(client);
   }
 }
+
 
 
 int new_client_connection() {
@@ -395,6 +406,7 @@ int new_client_connection() {
     strcpy(client->request_pipename, client_request_pipename);
     strcpy(client->response_pipename, client_response_pipename);
     strcpy(client->notification_pipename, client_notification_pipename);
+    client->has_subscribed = false;
     send_answer(client->response_pipename, 0, OP_CODE_CONNECT);
     handle_requests(client);
     return 0;
@@ -405,6 +417,12 @@ int new_client_connection() {
 void *server_fifo_handler(){
   printf("Server FIFO handler\n");
   while (1) {
+
+    server_fd = open(server_pipename, O_RDONLY);
+    if (server_fd < 0) {
+      fprintf(stderr, "Failed to open server FIFO: %s\n", strerror(errno));
+      continue;
+    }
     char opcode;
     if(read_all(server_fd, &opcode, sizeof(char), NULL) == 0){
       continue; // it could not get an opcode, so it will try again
@@ -418,11 +436,12 @@ void *server_fifo_handler(){
     if(new_client_connection(NULL) == 1){
       fprintf(stderr, "Failed to create new client connection\n");
       unlink(server_pipename);
-      close(server_fd);
     }
 
     printf("Client is now disconnected.\n");
   }
+  close(server_fd);
+  return NULL;
 }
 
 
@@ -486,15 +505,6 @@ int main(int argc, char** argv) {
     return 1;
   }
   fprintf(stdout, "The server has been initialized with pipename: %s\n", server_pipename);
-
-  server_fd = open(server_pipename, O_RDONLY);
-  if (server_fd < 0) {
-    fprintf(stderr, "Failed to open server FIFO: %s\n", strerror(errno));
-    kvs_terminate();
-    close(server_fd);
-    unlink(server_pipename);
-    return 1;
-  }
 
   // The handling of the server FIFO should be done in a separate thread
   pthread_t server_thread;

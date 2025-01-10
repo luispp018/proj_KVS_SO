@@ -249,6 +249,18 @@ int kvs_unsubscribe(const char* key) {
     return 1; // Subscription not found
 }
 
+int kvs_unsubscribe_all() {
+    pthread_rwlock_wrlock(&subscriptions_lock);
+
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        subscriptions[i].active = false;
+    }
+
+    pthread_rwlock_unlock(&subscriptions_lock);
+
+    return 0;
+}
+
 void notify_subscribers(const char* key, const char* value) {
     pthread_rwlock_rdlock(&subscriptions_lock);
 
@@ -256,29 +268,35 @@ void notify_subscribers(const char* key, const char* value) {
         if (subscriptions[i].active && strcmp(subscriptions[i].key, key) == 0) {
             int notif_fd = open(subscriptions[i].notif_pipe, O_WRONLY);
             if (notif_fd < 0) {
-                fprintf(stderr, "Failed to open notification pipe: %s\n", subscriptions[i].key);
+                fprintf(stderr, "Failed to open notification pipe: %s\n", subscriptions[i].notif_pipe);
                 continue;
             }
 
             // Message type: (<key>, <value>)
-            size_t offset = 0;
             char message[42];
-            if(value) {
+            if (value) {
                 snprintf(message, 42, "(%s,%s)", key, value);
             } else {
                 snprintf(message, 42, "(%s,DELETED)", key);
             }
-            size_t message_len = strlen(message);
+            size_t offset = 0;
+            size_t message_len = 42 * sizeof(char);
             char n_message[message_len];
-            memset(n_message, 0, message_len);
+            create_message(n_message, &offset, &message, message_len);
 
-            create_message(n_message, &offset, message, message_len);
-            if (write_all(notif_fd, n_message, offset) != 1) {
-                fprintf(stderr, "Failed to write to notification pipe: %s\n", subscriptions[i].key);
+
+            if (write_all(notif_fd, &n_message, message_len) != 1) {
+                fprintf(stderr, "Failed to write to notification pipe: %s\n", subscriptions[i].notif_pipe);
+                close(notif_fd);
+                continue;
             }
+            printf("Notified subscriber with message: %s\n", message);
             close(notif_fd);
         }
     }
 
     pthread_rwlock_unlock(&subscriptions_lock);
 }
+
+
+

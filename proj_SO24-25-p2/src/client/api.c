@@ -181,11 +181,7 @@ int kvs_subscribe(const char* key) {
   
   // Create message: (char) OP_CODE=3 | char[41] key
   create_message(request, &offset, &op_code, sizeof(char));
-  
-  // Copy key with padding if needed
-  char padded_key[41] = {0};  // 40 chars + null terminator
-  strncpy(padded_key, key, 40); // copy key to padded_key
-  create_message(request, &offset, padded_key, 41 * sizeof(char));  // copy padded_key to request
+  create_message(request, &offset, key, 41 * sizeof(char));
   
   // Send request
   req_fd = open(req_pipe, O_WRONLY);
@@ -199,7 +195,7 @@ int kvs_subscribe(const char* key) {
     close(req_fd);  
     return 1; 
   }
-  close(req_fd);
+  //close(req_fd);
   
   // Wait for response: (char) OP_CODE=3 | (char) result
   char response[2];
@@ -223,7 +219,7 @@ int kvs_subscribe(const char* key) {
   close(resp_fd);
   // print the response
   printf("Server returned %d for operation: SUBSCRIBE\n", response[1]);
-  return response[1];
+  return 0;
 }
 
 int kvs_unsubscribe(const char* key) {
@@ -237,11 +233,7 @@ int kvs_unsubscribe(const char* key) {
   
   // Create message: (char) OP_CODE=4 | char[41] key
   create_message(request, &offset, &op_code, sizeof(char));
-  
-  // Copy key with padding if needed
-  char padded_key[41] = {0};  // 40 chars + null terminator
-  strncpy(padded_key, key, 40); // copy key to padded_key
-  create_message(request, &offset, padded_key, 41 * sizeof(char));  // copy padded_key to request
+  create_message(request, &offset, key, 41 * sizeof(char));  // copy padded_key to request
   
   // Send request
   req_fd = open(req_pipe, O_WRONLY);
@@ -255,7 +247,7 @@ int kvs_unsubscribe(const char* key) {
     close(req_fd);
     return 1;
   }
-  close(req_fd);
+  //close(req_fd);
   
   // Wait for response: (char) OP_CODE=4 | (char) result
   char response[2];
@@ -279,5 +271,5 @@ int kvs_unsubscribe(const char* key) {
   close(resp_fd);
   
   printf("Server returned %d for operation: UNSUBSCRIBE\n", response[1]);
-  return response[1];
-}
+  return 0;
+}  

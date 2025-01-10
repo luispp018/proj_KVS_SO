@@ -5,10 +5,41 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <time.h>
+
 #include "parser.h"
 #include "src/client/api.h"
 #include "src/common/constants.h"
 #include "src/common/io.h"
+
+static int keep_running = 1;
+
+void *notification_handler(void *arg) {
+  char *notif_pipe_path = (char *)arg;
+  printf("Notification handler started.\n");
+
+  int notif_fd = open(notif_pipe_path, O_RDONLY | O_NONBLOCK);
+  if (notif_fd < 0) {
+    fprintf(stderr, "Failed to open notification pipe: %s\n", notif_pipe_path);
+    return NULL;
+  }
+
+  printf("Notification pipe opened.\n");
+
+  char response[42];
+  while (keep_running) {
+    if (read_all(notif_fd, response, 42, NULL) == 1) {
+      printf("[NOTIF]: %s\n", response);
+    } else {
+      struct timespec ts = {0, 100000000}; // 100ms
+      nanosleep(&ts, NULL); // Sleep for 100ms
+    }
+  }
+
+  close(notif_fd);
+  return NULL;
+}
+
 
 
 int main(int argc, char* argv[]) {
@@ -34,6 +65,12 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "Failed to connect to the server\n");
     return 1;
   }
+
+  pthread_t notif_thread;
+  if (pthread_create(&notif_thread, NULL, notification_handler, notif_pipe_path) != 0) {
+    fprintf(stderr, "Failed to create notification thread\n");
+    return 1;
+  }
   
 
   while (1) {
@@ -43,8 +80,11 @@ int main(int argc, char* argv[]) {
           fprintf(stderr, "Failed to disconnect to the server\n");
           return 1;
         }
-        // TODO: end notifications thread
-        printf("Disconnected from server\n");
+        // close notification thread
+        keep_running = 0;
+        pthread_join(notif_thread, NULL);
+
+        printf("Disconnected from server.\n");
         return 0;
 
       case CMD_SUBSCRIBE:
