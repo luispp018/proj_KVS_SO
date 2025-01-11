@@ -325,8 +325,8 @@ void handle_requests(client_t *client) {
 
     switch (opcode) {
       case OP_CODE_DISCONNECT: {
-        kvs_unsubscribe_all();
-        send_answer(client->response_pipename, 0, OP_CODE_DISCONNECT);
+        int disc_result = kvs_unsubscribe_all();
+        send_answer(client->response_pipename, disc_result, OP_CODE_DISCONNECT);
         close(request_fd);
         free(client);
         printf("Client disconnected.\n");

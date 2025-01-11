@@ -297,6 +297,3 @@ void notify_subscribers(const char* key, const char* value) {
 
     pthread_rwlock_unlock(&subscriptions_lock);
 }
-
-
-
