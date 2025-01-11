@@ -533,6 +533,8 @@ int main(int argc, char** argv) {
   }
 
   kvs_terminate();
+  close(server_fd);
+  unlink(server_pipename);
 
   return 0;
 }
