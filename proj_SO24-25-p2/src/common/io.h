@@ -7,11 +7,17 @@
 
 
 typedef struct {
+    char key[MAX_STRING_SIZE];
+    char notif_pipe[MAX_PIPE_PATH_LENGTH];
+    bool active;
+} Subscription;
+
+typedef struct {
     char request_pipename[MAX_PIPE_PATH_LENGTH];
     char response_pipename[MAX_PIPE_PATH_LENGTH];
     char notification_pipename[MAX_PIPE_PATH_LENGTH];
     bool has_subscribed;
-    int client_id;
+    Subscription subscriptions[MAX_NUMBER_SUB];
 } client_t;
 
 /// Reads a given number of bytes from a file descriptor. Will block until all

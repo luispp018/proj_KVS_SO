@@ -39,3 +39,5 @@ void rwlock_wrlock(pthread_rwlock_t *rwlock);
 /// Unlocks the read-write lock, exiting it in case of failure.
 /// @param rwlock Read-write lock to be unlocked.
 void rwlock_unlock(pthread_rwlock_t *rwlock);
+
+#endif // UTILS_H

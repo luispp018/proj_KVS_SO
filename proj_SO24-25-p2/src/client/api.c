@@ -172,7 +172,7 @@ int kvs_disconnect(void) {
 
 int kvs_subscribe(const char* key) {
   printf("Subscribing to key: %s\n", key);
-  
+
   char op_code = OP_CODE_SUBSCRIBE;
   size_t offset = 0;
   size_t request_len = sizeof(char) + 41 * sizeof(char);  // op_code + fixed key size

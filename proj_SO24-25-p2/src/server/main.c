@@ -15,6 +15,7 @@
 #include "operations.h"
 #include "io.h"
 #include "pthread.h"
+#include "pc_queue.h"
 
 #include "../common/constants.h"
 #include "../common/io.h"
@@ -33,6 +34,9 @@ size_t active_backups = 0;     // Number of active backups
 size_t max_backups;            // Maximum allowed simultaneous backups
 size_t max_threads;            // Maximum allowed simultaneous threads
 char* jobs_directory = NULL;
+
+static pc_queue_t *queue;
+static pthread_t *w_threads;
 
 char server_pipename[256] = "/tmp/";
 int server_fd;
@@ -306,69 +310,73 @@ void send_answer(char *response_pipename, int status, char OP_CODE) {
 
 
 
-void handle_requests(client_t *client) {
-  int request_fd = open(client->request_pipename, O_RDONLY);
-  if (request_fd < 0) {
-    fprintf(stderr, "Failed to open client request pipe: %s\n", client->request_pipename);
-    free(client);
-    return;
-  }
+void *handle_requests() {
 
+  client_t *client;
   while (1) {
-    char opcode;
-    if (read_all(request_fd, &opcode, sizeof(char), NULL) == 0) {
-      fprintf(stderr, "Failed to read opcode from request pipe\n");
-      close(request_fd);
-      free(client);
-      return;
+    client = (client_t *)pcq_dequeue(queue); 
+    if (client == NULL) {
+      continue;
     }
+    
+    send_answer(client->response_pipename, 0, OP_CODE_CONNECT); // The client has connected successfully and now has an available slot in the pcqueue
+    int request_fd = open(client->request_pipename, O_RDONLY); // We don't check if the fd is valid because if it isn't, we want the thread to be blocking here
 
-    switch (opcode) {
-      case OP_CODE_DISCONNECT: {
-        int disc_result = kvs_unsubscribe_all();
-        send_answer(client->response_pipename, disc_result, OP_CODE_DISCONNECT);
-        close(request_fd);
-        free(client);
-        printf("Client disconnected.\n");
-        return;
-      }
-
-      case OP_CODE_SUBSCRIBE: {
-
-        char key[41];
-        if (read_all(request_fd, key, 41, NULL) == 0) {
-          fprintf(stderr, "Failed to read key from request FIFO\n");
-          close(request_fd);
-          free(client);
-          return;
-        }
-        if (!client->has_subscribed) {
-          kvs_subscribe_init(client->notification_pipename);
-          client->has_subscribed = true;
-        }
-        int sub_result = kvs_subscribe(key);
-        send_answer(client->response_pipename, sub_result, OP_CODE_SUBSCRIBE);
+    while (1) {
+      char opcode;
+      if (read_all(request_fd, &opcode, sizeof(char), NULL) == 0) {
+        fprintf(stderr, "Failed to read opcode from request pipe\n");
         break;
       }
 
-      case OP_CODE_UNSUBSCRIBE: {
-
-        char key[41];
-        if (read_all(request_fd, key, 41, NULL) == 0) {
-          fprintf(stderr, "Failed to read key from request FIFO\n");
-          close(request_fd);
-          free(client);
-          return;
+      switch (opcode) {
+        
+        case OP_CODE_DISCONNECT: {
+          int disc_result = kvs_unsubscribe_all(client);
+          send_answer(client->response_pipename, disc_result, OP_CODE_DISCONNECT);
+          printf("Client disconnected.\n");
+          break;
         }
-        int unsub_result = kvs_unsubscribe(key);
-        send_answer(client->response_pipename, unsub_result, OP_CODE_UNSUBSCRIBE);
-        break;
+
+        case OP_CODE_SUBSCRIBE: {
+
+          char key[41];
+          if (read_all(request_fd, key, 41, NULL) == 0) {
+            fprintf(stderr, "Failed to read key from request FIFO\n");
+            break;
+          }
+          if (!client->has_subscribed) {
+            kvs_subscribe_init(client->notification_pipename, client);
+            client->has_subscribed = true;
+          }
+          int sub_result = kvs_subscribe(key, client);
+          send_answer(client->response_pipename, sub_result, OP_CODE_SUBSCRIBE);
+          break;
+        }
+
+        case OP_CODE_UNSUBSCRIBE: {
+
+          char key[41];
+          if (read_all(request_fd, key, 41, NULL) == 0) {
+            fprintf(stderr, "Failed to read key from request FIFO\n");
+            break;
+          }
+          int unsub_result = kvs_unsubscribe(key, client);
+          send_answer(client->response_pipename, unsub_result, OP_CODE_UNSUBSCRIBE);
+          break;
+        }
+
+        default:
+          fprintf(stderr, "Unknown opcode: %d\n", opcode);
+          break;
       }
 
-      default:
-        fprintf(stderr, "Unknown opcode: %d\n", opcode);
-        break;
+      if (opcode == OP_CODE_DISCONNECT) {
+        break; // In this case, the client has disconnected, and therefore the outer loop should also break
+      }
     }
+    close(request_fd);
+    free(client);
   }
 }
 
@@ -407,22 +415,37 @@ int new_client_connection() {
     strcpy(client->response_pipename, client_response_pipename);
     strcpy(client->notification_pipename, client_notification_pipename);
     client->has_subscribed = false;
-    send_answer(client->response_pipename, 0, OP_CODE_CONNECT);
-    handle_requests(client);
-    return 0;
+
+    if (pcq_enqueue(queue, (void*) client)) {
+      fprintf(stderr, "Failed to enqueue client\n");
+      free(client);
+      return 1;
+    }
   }
 
+  return 0;
+}
+
+int workers_handler() {
+  for(int i = 0; i < MAX_SESSION_COUNT; i++){
+    if(pthread_create(&w_threads[i], NULL, handle_requests, NULL) != 0){
+      fprintf(stderr, "Failed to create worker thread\n");
+      return 1;
+    }
+  }
+  return 0;
 }
 
 void *server_fifo_handler(){
   printf("Server FIFO handler\n");
+  server_fd = open(server_pipename, O_RDONLY);
   while (1) {
 
-    server_fd = open(server_pipename, O_RDONLY);
     if (server_fd < 0) {
       fprintf(stderr, "Failed to open server FIFO: %s\n", strerror(errno));
-      continue;
+      break;
     }
+
     char opcode;
     if(read_all(server_fd, &opcode, sizeof(char), NULL) == 0){
       continue; // it could not get an opcode, so it will try again
@@ -435,12 +458,20 @@ void *server_fifo_handler(){
 
     if(new_client_connection(NULL) == 1){
       fprintf(stderr, "Failed to create new client connection\n");
+      pcq_destroy(queue);
+      free(queue);
+      free(w_threads);
+      close(server_fd);
       unlink(server_pipename);
     }
 
-    printf("Client is now disconnected.\n");
   }
+  pcq_destroy(queue);
+  free(queue);
+  free(w_threads);
   close(server_fd);
+  unlink(server_pipename);
+  printf("Server FIFO handler terminated\n");
   return NULL;
 }
 
@@ -495,11 +526,43 @@ int main(int argc, char** argv) {
 
 
   // SERVER FIFO HANDLING
+
+  // Create producer-consumer queue, and initialize worker threads
+
+  queue = (pc_queue_t *)malloc(sizeof(pc_queue_t));
+  if (queue == NULL) {
+    fprintf(stderr, "Failed to allocate memory for queue\n");
+    kvs_terminate();
+    return 1;
+  }
+  if (pcq_create(queue, MAX_SESSION_COUNT) != 0) {
+    fprintf(stderr, "Failed to create queue\n");
+    kvs_terminate();
+    free(queue);
+    return 1;
+  }
+
+  w_threads = malloc(MAX_SESSION_COUNT * sizeof(pthread_t));
+  if (w_threads == NULL) {
+    fprintf(stderr, "Failed to allocate memory for worker threads\n");
+    kvs_terminate();
+    pcq_destroy(queue);
+    free(queue);
+    return 1;
+  }
+  if (workers_handler() != 0) {
+    fprintf(stderr, "Failed to create worker threads\n");
+    kvs_terminate();
+    pcq_destroy(queue);
+    free(queue);
+    free(w_threads);
+    return 1;
+  }
   
   strncat(server_pipename, argv[4], 256 - strlen(server_pipename) - 1);
   printf("Server pipename: %s\n", server_pipename);
   // Create server FIFO
-  if ((unlink(server_pipename) != 0 && errno != ENOENT) || mkfifo(server_pipename, 0640) < 0) {
+  if ((unlink(server_pipename) != 0 && errno != ENOENT) || mkfifo(server_pipename, 0777) < 0) {
     fprintf(stderr, "Failed to create server FIFO: %s\n", strerror(errno));
     kvs_terminate();
     return 1;
@@ -533,8 +596,6 @@ int main(int argc, char** argv) {
   }
 
   kvs_terminate();
-  close(server_fd);
-  unlink(server_pipename);
 
   return 0;
 }

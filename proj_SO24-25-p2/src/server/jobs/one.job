@@ -7,5 +7,6 @@ DELETE [c]
 READ [c]
 WAIT 10000
 WRITE [(a,tiago)]
+WRITE [(d,guita)]
 DELETE [b]
 SHOW

@@ -5,13 +5,7 @@
 #include <stdbool.h>
 #include "constants.h"
 #include "../common/constants.h"
-
-
-typedef struct {
-    char key[MAX_STRING_SIZE];
-    char notif_pipe[MAX_PIPE_PATH_LENGTH];
-    bool active;
-} Subscription;
+#include "../common/io.h"
 
 
 /// Initializes the KVS state.
@@ -73,25 +67,37 @@ int get_n_current_backups();
 
 /// Initializes the subscription system
 /// @param notif_pipe_name Name of the notification pipe.
-void kvs_subscribe_init(char *notif_pipe_name);
+/// @param client Client to initialize the subscription system.
+void kvs_subscribe_init(char *notif_pipe_name, client_t *client);
 
 /// Subscribes to a key.
 /// @param key Key to subscribe to.
+/// @param client Client to subscribe key from.
 /// @return 1 if the subscription was successful, 0 otherwise.
-int kvs_subscribe(const char* key);
+int kvs_subscribe(const char* key, client_t *client);
 
 /// Unsubscribes from a key.
 /// @param key Key to unsubscribe from.
+/// @param client Client to unsubscribe key from.
 /// @return 1 if the unsubscription was successful, 0 otherwise.
-int kvs_unsubscribe(const char* key);
+int kvs_unsubscribe(const char* key, client_t *client);
 
 /// Unsubscribes from all keys.
+/// @param client Client to unsubscribe all keys from.
 /// @return 0 if the unsubscription was successful, 1 otherwise.
-int kvs_unsubscribe_all();
+int kvs_unsubscribe_all(client_t *client);
 
-/// Notifies all subscribers of a key.
+/// Notifies the client subscribed to a key of a change in its value.
 /// @param key Key to notify subscribers of.
 /// @param value Value of the key.
 void notify_subscribers(const char* key, const char* value);
+
+/// Adds a client to the array of clients.
+/// @param client Client to add.
+void add_client(client_t *client);
+
+/// Removes a client from the array of clients.
+/// @param client Client to remove.
+void remove_client(client_t *client);
 
 #endif  // KVS_OPERATIONS_H

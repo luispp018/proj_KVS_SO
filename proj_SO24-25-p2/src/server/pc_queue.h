@@ -1,5 +1,5 @@
-#ifndef PRODUCER_CONSUMER_H
-#define PRODUCER_CONSUMER_H
+#ifndef PC_QUEUE_H
+#define PC_QUEUE_H
 
 #include <stddef.h>
 #include <semaphore.h>
@@ -42,4 +42,4 @@ int pcq_enqueue(pc_queue_t *queue, void *elem);
 // Returns the dequeued element on success, NULL on failure.
 void *pcq_dequeue(pc_queue_t *queue);
 
-#endif // PRODUCER_CONSUMER_H
+#endif // PC_QUEUE_H

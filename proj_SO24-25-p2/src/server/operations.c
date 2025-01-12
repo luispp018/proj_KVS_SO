@@ -17,8 +17,11 @@
 
 static struct HashTable *kvs_table = NULL;
 
-static Subscription subscriptions[MAX_NUMBER_SUB];
+//static Subscription subscriptions[MAX_NUMBER_SUB];
 static pthread_rwlock_t subscriptions_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+static client_t *clients[MAX_SESSION_COUNT];
+static pthread_rwlock_t clients_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 
 
@@ -196,15 +199,16 @@ void kvs_wait(unsigned int delay_ms) {
 
 
 // Initializes the subscription system
-void kvs_subscribe_init(char *notif_pipe_name) {
+void kvs_subscribe_init(char *notif_pipe_name, client_t *client) {
+    add_client(client);
     for (int i = 0; i < MAX_NUMBER_SUB; i++) {
-        subscriptions[i].active = false;
-        strcpy(subscriptions[i].notif_pipe, notif_pipe_name);
+        client->subscriptions[i].active = false;
+        strcpy(client->subscriptions[i].notif_pipe, notif_pipe_name);
     }
 }
 
 
-int kvs_subscribe(const char* key) {
+int kvs_subscribe(const char* key, client_t *client) {
 
     pthread_rwlock_wrlock(&subscriptions_lock);
 
@@ -217,9 +221,9 @@ int kvs_subscribe(const char* key) {
     }
 
     for (int i = 0; i < MAX_NUMBER_SUB; i++) {
-        if (!subscriptions[i].active) {
-            strcpy(subscriptions[i].key, key);
-            subscriptions[i].active = true;
+        if (!client->subscriptions[i].active) {
+            strcpy(client->subscriptions[i].key, key);
+            client->subscriptions[i].active = true;
             pthread_rwlock_unlock(&subscriptions_lock);
             return 1;
         }
@@ -232,68 +236,101 @@ int kvs_subscribe(const char* key) {
 }
 
 
-int kvs_unsubscribe(const char* key) {
+int kvs_unsubscribe(const char* key, client_t *client) {
 
     pthread_rwlock_wrlock(&subscriptions_lock);
 
     for (int i = 0; i < MAX_NUMBER_SUB; i++) {
-        if (subscriptions[i].active && strcmp(subscriptions[i].key, key) == 0) {
-            subscriptions[i].active = false;
+        if (client->subscriptions[i].active && strcmp(client->subscriptions[i].key, key) == 0) {
+            client->subscriptions[i].active = false;
             pthread_rwlock_unlock(&subscriptions_lock);
             return 0;
         }
     }
 
+    remove_client(client);
     pthread_rwlock_unlock(&subscriptions_lock);
 
     return 1; // Subscription not found
 }
 
-int kvs_unsubscribe_all() {
+int kvs_unsubscribe_all(client_t *client) {
     pthread_rwlock_wrlock(&subscriptions_lock);
 
     for (int i = 0; i < MAX_NUMBER_SUB; i++) {
-        subscriptions[i].active = false;
+        client->subscriptions[i].active = false;
     }
 
+    remove_client(client);
     pthread_rwlock_unlock(&subscriptions_lock);
 
     return 0;
 }
 
 void notify_subscribers(const char* key, const char* value) {
+    pthread_rwlock_rdlock(&clients_lock);
     pthread_rwlock_rdlock(&subscriptions_lock);
 
-    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
-        if (subscriptions[i].active && strcmp(subscriptions[i].key, key) == 0) {
-            int notif_fd = open(subscriptions[i].notif_pipe, O_WRONLY);
-            if (notif_fd < 0) {
-                fprintf(stderr, "Failed to open notification pipe: %s\n", subscriptions[i].notif_pipe);
-                continue;
-            }
+    for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+      client_t *client = clients[i];
+      if (client == NULL) {
+        continue;
+      }
 
-            // Message type: (<key>, <value>)
-            char message[42];
-            if (value) {
-                snprintf(message, 42, "(%s,%s)", key, value);
-            } else {
-                snprintf(message, 42, "(%s,DELETED)", key);
-            }
-            size_t offset = 0;
-            size_t message_len = 42 * sizeof(char);
-            char n_message[message_len];
-            create_message(n_message, &offset, &message, message_len);
+      for (int j = 0; j < MAX_NUMBER_SUB; j++) {
+          if (client->subscriptions[j].active && strcmp(client->subscriptions[j].key, key) == 0) {
+              int notif_fd = open(client->subscriptions[j].notif_pipe, O_WRONLY);
+              if (notif_fd < 0) {
+                  fprintf(stderr, "Failed to open notification pipe: %s\n", client->subscriptions[j].notif_pipe);
+                  continue;
+              }
+
+              // Message type: (<key>, <value>)
+              char message[42];
+              if (value) {
+                  snprintf(message, 42, "(%s,%s)", key, value);
+              } else {
+                  snprintf(message, 42, "(%s,DELETED)", key);
+              }
+              size_t offset = 0;
+              size_t message_len = 42 * sizeof(char);
+              char n_message[message_len];
+              create_message(n_message, &offset, &message, message_len);
 
 
-            if (write_all(notif_fd, &n_message, message_len) != 1) {
-                fprintf(stderr, "Failed to write to notification pipe: %s\n", subscriptions[i].notif_pipe);
-                close(notif_fd);
-                continue;
-            }
-            printf("Notified subscriber with message: %s\n", message);
-            close(notif_fd);
-        }
+              if (write_all(notif_fd, &n_message, message_len) != 1) {
+                  fprintf(stderr, "Failed to write to notification pipe: %s\n", client->subscriptions[j].notif_pipe);
+                  close(notif_fd);
+                  continue;
+              }
+              printf("Notified subscriber with message: %s\n", message);
+              close(notif_fd);
+          }
+      }
     }
-
     pthread_rwlock_unlock(&subscriptions_lock);
+    pthread_rwlock_unlock(&clients_lock);
+}
+
+// Adds a client to the clients array
+void add_client(client_t *client) {
+  pthread_rwlock_wrlock(&clients_lock);
+  for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+    if (clients[i] == NULL) {
+      clients[i] = client;
+      break;
+    }
+  }
+  pthread_rwlock_unlock(&clients_lock);
+}
+
+void remove_client(client_t *client) {
+  pthread_rwlock_wrlock(&clients_lock);
+  for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+    if (clients[i] == client) {
+      clients[i] = NULL;
+      break;
+    }
+  }
+  pthread_rwlock_unlock(&clients_lock);
 }
