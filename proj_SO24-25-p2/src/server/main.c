@@ -491,19 +491,25 @@ int new_client_connection() {
   char client_request_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_request_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
     fprintf(stderr, "Failed to read from server FIFO\n");
-    error_status = 1; 
+    free(client);
+    error_status = 1;
+    return 1;
   }
 
   char client_response_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_response_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
     fprintf(stderr, "Failed to read from server FIFO\n");
+    free(client);
     error_status = 1;
+    return 1;
   }
 
   char client_notification_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_notification_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
-    fprintf(stderr, "Failed to read from server FIFO\n"); 
+    fprintf(stderr, "Failed to read from server FIFO\n");
+    free(client); 
     error_status = 1;
+    return 1;
   }
 
   if (error_status) {
@@ -538,7 +544,7 @@ int workers_handler() {
 }
 
 void *server_fifo_handler(){
-  printf("Server FIFO handler\n");
+
   server_fd = open(server_pipename, O_RDONLY);  // Open the server FIFO
   if (server_fd < 0) {  // Verify if the server FIFO was opened successfully
       fprintf(stderr, "Failed to open server FIFO: %s\n", strerror(errno));
@@ -575,7 +581,7 @@ void *server_fifo_handler(){
 
   }
 
-  printf("Server FIFO handler terminated.\n"); // Print that the server FIFO handler has terminated
+
   server_exit(0); // Exit the server
   return NULL;  
 }
@@ -635,7 +641,7 @@ int main(int argc, char** argv) {
 
   // Create producer-consumer queue, and initialize worker threads
 
-  printf("Process ID: %d\n", getpid());
+  printf("Server Process ID: %d\n", getpid());
 
   signal(SIGPIPE, SIG_IGN);
 
@@ -668,13 +674,13 @@ int main(int argc, char** argv) {
   if (workers_handler() != 0) {
     fprintf(stderr, "Failed to create worker threads\n");
     kvs_terminate();  
-    pcq_destroy(queue); 
-    free(queue);  
+    pcq_destroy(queue);
+    free(queue);
     free(w_threads);
     return 1;
   }
   
-  strncat(server_pipename, argv[4], 256 - strlen(server_pipename) - 1);
+  strncat(server_pipename, argv[4], 256 - strlen(server_pipename) - 1); // create server pipename already in the /tmp/ directory
   printf("Server pipename: %s\n", server_pipename);
   // Create server FIFO
   if ((unlink(server_pipename) != 0 && errno != ENOENT) || mkfifo(server_pipename, 0777) < 0) {
@@ -692,6 +698,9 @@ int main(int argc, char** argv) {
   if (pthread_create(&server_thread, NULL, server_fifo_handler, NULL) != 0) {
     fprintf(stderr, "Failed to create server thread\n");
     kvs_terminate();
+    pcq_destroy(queue);
+    free(queue);
+    free(w_threads);
     return 1;
   }
 
@@ -700,6 +709,9 @@ int main(int argc, char** argv) {
   if (pthread_join(server_thread, NULL) != 0) {
     fprintf(stderr, "Failed to join server thread\n");
     kvs_terminate();
+    pcq_destroy(queue);
+    free(queue);
+    free(w_threads);
     return 1;
   }
 

@@ -198,41 +198,41 @@ void kvs_wait(unsigned int delay_ms) {
 }
 
 
-// Initializes the subscription system
+
 void kvs_subscribe_init(char *notif_pipe_name, client_t *client) {
     add_client(client); // Add client to the clients array
-    for (int i = 0; i < MAX_NUMBER_SUB; i++) {  // Initialize the subscriptions
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
         client->subscriptions[i].active = false;  // Set all subscriptions to inactive
-        strcpy(client->subscriptions[i].notif_pipe, notif_pipe_name); // Set the notification pipe name
+        strcpy(client->subscriptions[i].notif_pipe, notif_pipe_name);
     }
 }
 
 
 int kvs_subscribe(const char* key, client_t *client) {
 
-    pthread_rwlock_wrlock(&subscriptions_lock); // Lock the subscriptions
+    pthread_rwlock_wrlock(&subscriptions_lock);
 
     // Check if the key exists
-    char *result = read_pair(kvs_table, key); // Read the key from the kvs table
-    if (result == NULL) { // Verify if the key exists
-        pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
+    char *result = read_pair(kvs_table, key);
+    if (result == NULL) {
+        pthread_rwlock_unlock(&subscriptions_lock);
         fprintf(stderr, "Key does not exist in the kvs table: %s\n", key);  
         return 0; // Key does not exist
     }
 
-    for (int i = 0; i < MAX_NUMBER_SUB; i++) {  // Iterate over the subscriptions
-        if (!client->subscriptions[i].active) { // Check if the subscription is inactive
-            strcpy(client->subscriptions[i].key, key);  // Set the key
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        if (!client->subscriptions[i].active) {
+            strcpy(client->subscriptions[i].key, key);
             client->subscriptions[i].active = true; // Set the subscription to active
-            pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
+            pthread_rwlock_unlock(&subscriptions_lock);
             return 1; // Subscription successful
         } else if (strcmp(client->subscriptions[i].key, key) == 0) {  // Check if the key already exists
-            pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
+            pthread_rwlock_unlock(&subscriptions_lock);
             return 0; // Subscription already exists
         }
     }
 
-    pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
+    pthread_rwlock_unlock(&subscriptions_lock);
 
     return 0; // No more space for subscriptions
 
@@ -241,99 +241,98 @@ int kvs_subscribe(const char* key, client_t *client) {
 
 int kvs_unsubscribe(const char* key, client_t *client) {
 
-    pthread_rwlock_wrlock(&subscriptions_lock); // Lock the subscriptions
+    pthread_rwlock_wrlock(&subscriptions_lock);
 
-    for (int i = 0; i < MAX_NUMBER_SUB; i++) {  // Iterate over the subscriptions
-        if (client->subscriptions[i].active && strcmp(client->subscriptions[i].key, key) == 0) {  // Check if the subscription is active and the key matches
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        if (client->subscriptions[i].active && strcmp(client->subscriptions[i].key, key) == 0) {
             client->subscriptions[i].active = false;  // Set the subscription to inactive
-            pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
-            return 0; // Subscription removed
+            pthread_rwlock_unlock(&subscriptions_lock);
+            return 0;
         }
     }
 
-    remove_client(client);  // Remove the client from the clients array
     pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
 
     return 1; // Subscription not found
 }
 
 int kvs_unsubscribe_all(client_t *client) {
-    pthread_rwlock_wrlock(&subscriptions_lock); // Lock the subscriptions
+    pthread_rwlock_wrlock(&subscriptions_lock);
 
-    for (int i = 0; i < MAX_NUMBER_SUB; i++) {  // Iterate over the subscriptions
-        client->subscriptions[i].active = false;  // Set the subscription to inactive
+    for (int i = 0; i < MAX_NUMBER_SUB; i++) {
+        client->subscriptions[i].active = false;
     }
 
     remove_client(client);  // Remove the client from the clients array
-    pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
+    pthread_rwlock_unlock(&subscriptions_lock);
 
     return 0; // All subscriptions removed
 } 
 
 void notify_subscribers(const char* key, const char* value) {
-    pthread_rwlock_rdlock(&clients_lock); // Lock the clients
-    pthread_rwlock_rdlock(&subscriptions_lock); // Lock the subscriptions
+    pthread_rwlock_rdlock(&clients_lock);
+    pthread_rwlock_rdlock(&subscriptions_lock);
 
-    for (int i = 0; i < MAX_SESSION_COUNT; i++) { // Iterate over the clients
-      client_t *client = clients[i];  // Get the client
-      if (client == NULL) { // Check if the client is null
-        continue; // Continue to the next client
+    for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+      client_t *client = clients[i];
+      if (client == NULL) { // Check if the client exists
+        continue; // The client does not exist, continue to the next client
       }
 
-      for (int j = 0; j < MAX_NUMBER_SUB; j++) {   // Iterate over the subscriptions
-          if (client->subscriptions[j].active && strcmp(client->subscriptions[j].key, key) == 0) {  // Check if the subscription is active and the key matches
-              int notif_fd = open(client->subscriptions[j].notif_pipe, O_WRONLY); // Open the notification pipe
-              if (notif_fd < 0) { // Check if the notification pipe was opened
+      for (int j = 0; j < MAX_NUMBER_SUB; j++) {
+          if (client->subscriptions[j].active && strcmp(client->subscriptions[j].key, key) == 0) { 
+              int notif_fd = open(client->subscriptions[j].notif_pipe, O_WRONLY);
+              if (notif_fd < 0) {
                   fprintf(stderr, "Failed to open notification pipe: %s\n", client->subscriptions[j].notif_pipe); 
-                  continue; // Continue to the next subscription
+                  continue;
               }
 
               // Message type: (<key>, <value>)
-              char message[42];
+              char message[40];
               if (value) {  // Check if the value exists
-                  snprintf(message, 42, "(%s,%s)", key, value); // Set the message
-              } else {  // Value does not exist
-                  snprintf(message, 42, "(%s,DELETED)", key); // Set the message
+                  snprintf(message, 40, "(%s,%s)", key, value); // Set the message
+              } else {  // Value does not exist, the key was deleted
+                  snprintf(message, 40, "(%s,DELETED)", key); // Set the message
               }
-              size_t offset = 0;  // Set the offset
-              size_t message_len = 42 * sizeof(char); // Set the message length
-              char n_message[message_len];  // Set the notification message
-              create_message(n_message, &offset, &message, message_len);  // Create the message
+              size_t offset = 0;
+              size_t message_len = 40 * sizeof(char);
+              char n_message[message_len];
+              create_message(n_message, &offset, &message, message_len);
 
 
-              if (write_all(notif_fd, &n_message, message_len) != 1) {  // Write the message to the notification pipe
+              if (write_all(notif_fd, &n_message, message_len) != 1) {
                   fprintf(stderr, "Failed to write to notification pipe: %s\n", client->subscriptions[j].notif_pipe); 
-                  close(notif_fd);  // Close the notification pipe
-                  continue; // Continue to the next subscription
+                  close(notif_fd);
+                  continue;
               }
               printf("Notified subscriber with message: %s\n", message);  
-              close(notif_fd);  // Close the notification pipe
+              close(notif_fd);
           }
       }
     }
-    pthread_rwlock_unlock(&subscriptions_lock); // Unlock the subscriptions
-    pthread_rwlock_unlock(&clients_lock); // Unlock the clients
+    pthread_rwlock_unlock(&subscriptions_lock);
+    pthread_rwlock_unlock(&clients_lock);
 }
 
-// Adds a client to the clients array
+
 void add_client(client_t *client) {
-  pthread_rwlock_wrlock(&clients_lock); // Lock the clients
-  for (int i = 0; i < MAX_SESSION_COUNT; i++) { // Iterate over the clients
-    if (clients[i] == NULL) { // Check if the client is null
-      clients[i] = client;  // Set the client
-      break;  // Break the loop
+  pthread_rwlock_wrlock(&clients_lock); 
+  for (int i = 0; i < MAX_SESSION_COUNT; i++) { 
+    if (clients[i] == NULL) {
+      clients[i] = client;
+      break;
     }
   }
-  pthread_rwlock_unlock(&clients_lock); // Unlock the clients
+  pthread_rwlock_unlock(&clients_lock);
 }
 
 void remove_client(client_t *client) {
-  pthread_rwlock_wrlock(&clients_lock); // Lock the clients
-  for (int i = 0; i < MAX_SESSION_COUNT; i++) {  // Iterate over the clients
-    if (clients[i] == client) { // Check if the client matches
-      clients[i] = NULL;  // Set the client to null
-      break;  // Break the loop
+  pthread_rwlock_wrlock(&clients_lock);
+  for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+    if (clients[i] == client) {
+      clients[i] = NULL;
+      break;
     } 
   }
-  pthread_rwlock_unlock(&clients_lock); // Unlock the clients
+  pthread_rwlock_unlock(&clients_lock);
 }

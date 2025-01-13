@@ -28,7 +28,7 @@ void *notification_handler(void *arg) {
 
   char response[42];
   while (keep_running) {
-    if (read_all(notif_fd, response, 42, NULL) == 1) {
+    if (read_all(notif_fd, response, 40, NULL) == 1) {
       printf("[NOTIF]: %s\n", response);
     } else {
       struct timespec ts = {0, 100000000}; // 100ms
@@ -48,9 +48,9 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  char req_pipe_path[256] = "/tmp/req";
-  char resp_pipe_path[256] = "/tmp/resp";
-  char notif_pipe_path[256] = "/tmp/notif";
+  char req_pipe_path[256] = "/tmp/g113_req";
+  char resp_pipe_path[256] = "/tmp/g113_resp";
+  char notif_pipe_path[256] = "/tmp/g113_notif";
 
   char keys[MAX_NUMBER_SUB][MAX_STRING_SIZE] = {0};
   unsigned int delay_ms;
