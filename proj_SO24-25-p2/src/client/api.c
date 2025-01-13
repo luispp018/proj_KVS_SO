@@ -46,20 +46,19 @@ int kvs_connect(char const* req_pipe_path, char const* resp_pipe_path, char cons
 
   // Open server pipe for writing
   int server_fd = open(server_pipe_path, O_WRONLY);
-  printf("Server pipe: %s\n", server_pipe_path);
   if (server_fd < 0) {
     fprintf(stderr, "Error opening server pipe: %s. Error type: %s\n", server_pipe_path, strerror(errno));
     return 1;
   }
 
-  printf("Server pipe opened\n");
+  printf("Server pipe: %s\n", server_pipe_path);
   printf("Request pipe: %s\n", req_pipe);
   printf("Response pipe: %s\n", resp_pipe);
   printf("Notification pipe: %s\n", notification_pipe);
 
   // Send connect message
 
-  printf("Sending connect message to server\n");
+  printf("Sending connect message to server...\n");
 
   char op_code = OP_CODE_CONNECT;
   size_t offset = 0;
@@ -93,13 +92,12 @@ int kvs_connect(char const* req_pipe_path, char const* resp_pipe_path, char cons
     fprintf(stderr, "Error opening response pipe: %s\n", resp_pipe);
     return 1;
   }
-  printf("Response pipe opened\n");
 
   char response[2];
   if (read_all(resp_fd, response, 2, NULL) != 1) {
-    fprintf(stderr, "Failed to read response from server\n");
+    fprintf(stderr, "[ERROR]: Failed to read response from server. Shutting down...\n");
     close(resp_fd);
-    return 1;
+    exit(0);
   }
 
   if (response[0] != OP_CODE_CONNECT) {
@@ -146,9 +144,10 @@ int kvs_disconnect(void) {
     return 1;
   }
   if (read_all(resp_fd, response, 2, NULL) != 1) {
-    fprintf(stderr, "Failed to read response from server\n");
+    //print error message with error code
+    fprintf(stderr, "[ERROR]: Failed to read response from server. Shutting down...\n");
     close(resp_fd);
-    return 1;
+    exit(0);
   }
   if (response[0] != OP_CODE_DISCONNECT) {
     fprintf(stderr, "Unexpected response from server\n");
@@ -157,6 +156,11 @@ int kvs_disconnect(void) {
   }
   close(resp_fd);
 
+  if(response[1] != 0) {
+    fprintf(stderr, "Failed to disconnect from the server\n");
+    printf("Server returned %d for operation: DISCONNECT\n", response[1]);
+    return 1;
+  }
   // Close and unlink pipes
   close(req_fd);
   close(resp_fd);
@@ -206,9 +210,9 @@ int kvs_subscribe(const char* key) {
   }
   
   if (read_all(resp_fd, response, 2, NULL) != 1) {  //  verify if the message can be read from the file descriptor
-    fprintf(stderr, "Failed to read response from server\n");
+    fprintf(stderr, "[ERROR]: Failed to read response from server. Shutting down...\n");
     close(resp_fd);
-    return 1;
+    exit(0);
   }
   
   if (response[0] != OP_CODE_SUBSCRIBE) { // check if the response is valid
@@ -258,9 +262,9 @@ int kvs_unsubscribe(const char* key) {
   }
   
   if (read_all(resp_fd, response, 2, NULL) != 1) {  //  verify if the message can be read from the file descriptor
-    fprintf(stderr, "Failed to read response from server\n");
+    fprintf(stderr, "[ERROR]: Failed to read response from server. Shutting down...\n");
     close(resp_fd);
-    return 1;
+    exit(0);
   }
   
   if (response[0] != OP_CODE_UNSUBSCRIBE) { // check if the response is valid
