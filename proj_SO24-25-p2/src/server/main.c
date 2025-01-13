@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include <errno.h>
+#include <signal.h>
 
 #include "constants.h"
 #include "parser.h"
@@ -38,49 +39,56 @@ char* jobs_directory = NULL;
 static pc_queue_t *queue;
 static pthread_t *w_threads;
 
+volatile sig_atomic_t received_sigusr1 = 0;
+
+pthread_cond_t shutdown_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t shutdown_mutex = PTHREAD_MUTEX_INITIALIZER;
+int active_clients = 0;
+
 char server_pipename[256] = "/tmp/";
 int server_fd;
 
+
 int filter_job_files(const struct dirent* entry) {
-    const char* dot = strrchr(entry->d_name, '.');
-    if (dot != NULL && strcmp(dot, ".job") == 0) {
-        return 1;  // Keep this file (it has the .job extension)
+    const char* dot = strrchr(entry->d_name, '.');  
+    if (dot != NULL && strcmp(dot, ".job") == 0) { 
+        return 1; 
     }
     return 0;
 }
 
 static int entry_files(const char* dir, struct dirent* entry, char* in_path, char* out_path) {
-  const char* dot = strrchr(entry->d_name, '.');
-  if (dot == NULL || dot == entry->d_name || strlen(dot) != 4 || strcmp(dot, ".job")) {
-    return 1;
+  const char* dot = strrchr(entry->d_name, '.');  
+  if (dot == NULL || dot == entry->d_name || strlen(dot) != 4 || strcmp(dot, ".job")) { 
+    return 1;  
   }
 
-  if (strlen(entry->d_name) + strlen(dir) + 2 > MAX_JOB_FILE_NAME_SIZE) {
+  if (strlen(entry->d_name) + strlen(dir) + 2 > MAX_JOB_FILE_NAME_SIZE) { 
     fprintf(stderr, "%s/%s\n", dir, entry->d_name);
-    return 1;
+    return 1; 
   }
 
-  strcpy(in_path, dir);
-  strcat(in_path, "/");
-  strcat(in_path, entry->d_name);
+  strcpy(in_path, dir); 
+  strcat(in_path, "/"); 
+  strcat(in_path, entry->d_name); 
 
-  strcpy(out_path, in_path);
-  strcpy(strrchr(out_path, '.'), ".out");
+  strcpy(out_path, in_path);  
+  strcpy(strrchr(out_path, '.'), ".out"); 
 
   return 0;
 }
 
 static int run_job(int in_fd, int out_fd, char* filename) {
-  size_t file_backups = 0;
+  size_t file_backups = 0; 
   while (1) {
-    char keys[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
-    char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
-    unsigned int delay;
+    char keys[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};   
+    char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0}; 
+    unsigned int delay; 
     size_t num_pairs;
 
-    switch (get_next(in_fd)) {
-      case CMD_WRITE:
-        num_pairs = parse_write(in_fd, keys, values, MAX_WRITE_SIZE, MAX_STRING_SIZE);
+    switch (get_next(in_fd)) { 
+      case CMD_WRITE: 
+        num_pairs = parse_write(in_fd, keys, values, MAX_WRITE_SIZE, MAX_STRING_SIZE);  
         if (num_pairs == 0) {
           write_str(STDERR_FILENO, "Invalid command. See HELP for usage\n");
           continue;
@@ -265,10 +273,6 @@ static void dispatch_threads(DIR* dir) {
     }
   }
 
-  // ler do FIFO de registo
-  // ler o opcode do pedido
-  // fazer switch case para cada opcode
-
 
   for (unsigned int i = 0; i < max_threads; i++) {
     if (pthread_join(threads[i], NULL) != 0) {
@@ -287,44 +291,136 @@ static void dispatch_threads(DIR* dir) {
 }
 
 
-void send_answer(char *response_pipename, int status, char OP_CODE) {
-  int response_fd = open(response_pipename, O_WRONLY);
-  if (response_fd < 0) {
+// ---------------------------------------------------- Project 2 ----------------------------------------------------
+
+void send_answer(char *response_pipename, int status, char OP_CODE) { 
+  
+  int resp_fd = open(response_pipename, O_WRONLY); 
+  if (resp_fd < 0) {
     fprintf(stderr, "Failed to open response FIFO: %s\n", strerror(errno));
-    return;
+    return; // Return if the response FIFO was not opened successfully
   }
 
   size_t offset = 0;
   size_t message_size = 2;
   char opcode = OP_CODE;
   char r_status = (char)status;
-  char response[2];
+  char response[2]; // Initialize the response array to store the message
   create_message(response, &offset, &opcode, sizeof(char));
-  create_message(response, &offset, &r_status, sizeof(char));
-  if (write_all(response_fd, response, message_size) == -1) {
+  create_message(response, &offset, &r_status, sizeof(char)); 
+  if (write_all(resp_fd, response, message_size) == -1) { // Verify if the message was written successfully
     fprintf(stderr, "Failed to write to response FIFO: %s\n", strerror(errno));
   }
-  close(response_fd);
+  close(resp_fd); // Close the response FIFO
   
+}
+
+void shutdown_client(client_t *client) {
+
+    printf("Shutting down client...\n");
+
+    // Open and close response pipe
+    printf("Closing response pipe...\n");
+    int response_fd = open(client->response_pipename, O_RDWR);
+    if (response_fd >= 0) {
+      close(response_fd);
+    }
+
+    // Open and close notification pipe
+    printf("Closing notification pipe...\n");
+    int notification_fd = open(client->notification_pipename, O_RDWR);
+    if (notification_fd >= 0) {
+      close(notification_fd);
+    }
+
+    kvs_unsubscribe_all(client); // Remove all client subscriptions
+
+    printf("Client shutdown complete.\n");
+    
+}
+
+void server_exit(int signum) {
+  printf("\n[SERVER] Exiting...\n");
+
+  kvs_terminate();
+  
+  if (pcq_destroy(queue)) {  // Verify if the queue was destroyed successfully
+    fprintf(stderr, "Failed to destroy queue\n");
+    exit(1);  // Exit with error
+  }
+  free(queue);
+  free(w_threads);
+  close(server_fd);
+  unlink(server_pipename);
+
+  if (signum != 0) {
+    exit(0);
+  }
+}
+
+
+void sigusr1_handler(int signum) {
+  fprintf(stdout, "Received SIGUSR1 with signum: %d\n", signum);
+  pthread_mutex_lock(&shutdown_mutex);
+  received_sigusr1 = 1;
+  pthread_cond_broadcast(&shutdown_cond);
+  pthread_mutex_unlock(&shutdown_mutex);
+}
+
+int signal_handlers_init() { 
+  // Set SIGUSR1 handler
+  if (signal(SIGUSR1, sigusr1_handler) == SIG_ERR) {        
+    fprintf(stderr, "Failed to set SIGUSR1 handler\n");
+    return 1;
+  }
+  // Set SIGINT handler
+  if (signal(SIGINT, server_exit) == SIG_ERR) { 
+    fprintf(stderr, "Failed to set SIGINT handler\n");
+    return 1;
+  }
+
+  return 0;
 }
 
 
 
 void *handle_requests() {
 
-  client_t *client;
+  // invalidate the thread from receiving sigusr1 using pthread_sigmask
+  sigset_t set; 
+  sigemptyset(&set);  
+  sigaddset(&set, SIGUSR1);
+
+  if (pthread_sigmask(SIG_BLOCK, &set, NULL) != 0) {  
+    fprintf(stderr, "Failed to block SIGUSR1\n");
+  }
+
+  client_t *client; // Initialize the client struct
   while (1) {
-    client = (client_t *)pcq_dequeue(queue); 
-    if (client == NULL) {
+    client = (client_t *)pcq_dequeue(queue);  // Dequeue a client from the pcqueue
+    if (client == NULL) { // Verify if the client was dequeued successfully
       continue;
     }
+
+    pthread_mutex_lock(&shutdown_mutex);
+    active_clients++;
+    pthread_mutex_unlock(&shutdown_mutex);
     
-    send_answer(client->response_pipename, 0, OP_CODE_CONNECT); // The client has connected successfully and now has an available slot in the pcqueue
-    int request_fd = open(client->request_pipename, O_RDONLY); // We don't check if the fd is valid because if it isn't, we want the thread to be blocking here
+    send_answer(client->response_pipename, 0, OP_CODE_CONNECT); // The client has connected successfully and is now being processed by a worker thread
+    int request_fd = open(client->request_pipename, O_RDONLY); // Blocks until a request is received
 
     while (1) {
-      char opcode;
-      if (read_all(request_fd, &opcode, sizeof(char), NULL) == 0) {
+      
+      pthread_mutex_lock(&shutdown_mutex);
+      if(received_sigusr1){ // Verify if the server received SIGUSR1
+        shutdown_client(client); // Shutdown the client
+        pthread_mutex_unlock(&shutdown_mutex);
+        break;
+      }
+      pthread_mutex_unlock(&shutdown_mutex);
+
+      char opcode;  // Initialize the opcode
+      if (read_all(request_fd, &opcode, sizeof(char), NULL) == 0) { // Verify if the opcode was read successfully
         fprintf(stderr, "Failed to read opcode from request pipe\n");
         break;
       }
@@ -332,9 +428,9 @@ void *handle_requests() {
       switch (opcode) {
         
         case OP_CODE_DISCONNECT: {
-          int disc_result = kvs_unsubscribe_all(client);
+          int disc_result = kvs_unsubscribe_all(client);  // Unsubscribe the client from all keys
           send_answer(client->response_pipename, disc_result, OP_CODE_DISCONNECT);
-          printf("Client disconnected.\n");
+          printf("[SERVER]: Client disconnected.\n");
           break;
         }
 
@@ -345,11 +441,11 @@ void *handle_requests() {
             fprintf(stderr, "Failed to read key from request FIFO\n");
             break;
           }
-          if (!client->has_subscribed) {
-            kvs_subscribe_init(client->notification_pipename, client);
-            client->has_subscribed = true;
+          if (!client->has_subscribed) {  // If the client has not subscribed yet
+            kvs_subscribe_init(client->notification_pipename, client);  // Initialize the subscriptions array
+            client->has_subscribed = true;  // Set the client as subscribed
           }
-          int sub_result = kvs_subscribe(key, client);
+          int sub_result = kvs_subscribe(key, client);   // Subscribe the client to the key
           send_answer(client->response_pipename, sub_result, OP_CODE_SUBSCRIBE);
           break;
         }
@@ -357,11 +453,11 @@ void *handle_requests() {
         case OP_CODE_UNSUBSCRIBE: {
 
           char key[41];
-          if (read_all(request_fd, key, 41, NULL) == 0) {
+          if (read_all(request_fd, key, 41, NULL) == 0) { // Verify if the key was read successfully
             fprintf(stderr, "Failed to read key from request FIFO\n");
             break;
           }
-          int unsub_result = kvs_unsubscribe(key, client);
+          int unsub_result = kvs_unsubscribe(key, client);   // Unsubscribe the client from the key
           send_answer(client->response_pipename, unsub_result, OP_CODE_UNSUBSCRIBE);
           break;
         }
@@ -375,22 +471,27 @@ void *handle_requests() {
         break; // In this case, the client has disconnected, and therefore the outer loop should also break
       }
     }
-    close(request_fd);
-    free(client);
+    close(request_fd);  // Close the request FIFO
+    free(client); // Free the memory allocated for the client
+    active_clients--;
+    if(active_clients == 0){
+      pthread_cond_signal(&shutdown_cond);
+    }
+    
   }
 }
 
 
 
 int new_client_connection() {
-  printf("New client connection\n");
+  printf("[SERVER]: New client connection.\n");
   client_t *client = (client_t *)malloc(sizeof(client_t));
-  int error_status = 0;
+  int error_status = 0; // Initialize the error status to 0
 
   char client_request_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_request_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
     fprintf(stderr, "Failed to read from server FIFO\n");
-    error_status = 1;
+    error_status = 1; 
   }
 
   char client_response_pipename[MAX_PIPE_PATH_LENGTH];
@@ -401,12 +502,12 @@ int new_client_connection() {
 
   char client_notification_pipename[MAX_PIPE_PATH_LENGTH];
   if(read_all(server_fd, client_notification_pipename, MAX_PIPE_PATH_LENGTH * sizeof(char), NULL) == -1){
-    fprintf(stderr, "Failed to read from server FIFO\n");
+    fprintf(stderr, "Failed to read from server FIFO\n"); 
     error_status = 1;
   }
 
   if (error_status) {
-    send_answer(client->response_pipename, 1, OP_CODE_CONNECT);
+    send_answer(client->response_pipename, 1, OP_CODE_CONNECT); // Send the answer to the client reporting a failure
     free(client);
     return 1;
 
@@ -414,9 +515,9 @@ int new_client_connection() {
     strcpy(client->request_pipename, client_request_pipename);
     strcpy(client->response_pipename, client_response_pipename);
     strcpy(client->notification_pipename, client_notification_pipename);
-    client->has_subscribed = false;
+    client->has_subscribed = false; // Set the client as not subscribed
 
-    if (pcq_enqueue(queue, (void*) client)) {
+    if (pcq_enqueue(queue, (void*) client)) { // Verify if the client was enqueued successfully
       fprintf(stderr, "Failed to enqueue client\n");
       free(client);
       return 1;
@@ -428,7 +529,7 @@ int new_client_connection() {
 
 int workers_handler() {
   for(int i = 0; i < MAX_SESSION_COUNT; i++){
-    if(pthread_create(&w_threads[i], NULL, handle_requests, NULL) != 0){
+    if(pthread_create(&w_threads[i], NULL, handle_requests, NULL) != 0){  
       fprintf(stderr, "Failed to create worker thread\n");
       return 1;
     }
@@ -438,13 +539,23 @@ int workers_handler() {
 
 void *server_fifo_handler(){
   printf("Server FIFO handler\n");
-  server_fd = open(server_pipename, O_RDONLY);
-  while (1) {
-
-    if (server_fd < 0) {
+  server_fd = open(server_pipename, O_RDONLY);  // Open the server FIFO
+  if (server_fd < 0) {  // Verify if the server FIFO was opened successfully
       fprintf(stderr, "Failed to open server FIFO: %s\n", strerror(errno));
-      break;
+      server_exit(0);
+      return NULL;
+  }
+
+  while (1) {
+    pthread_mutex_lock(&shutdown_mutex);
+    if(received_sigusr1){ // Verify if the server received SIGUSR1
+      signal_handlers_init(); // Reinitialize the signal handlers
+      pthread_cond_wait(&shutdown_cond, &shutdown_mutex); // Wait for the shutdown condition
+      received_sigusr1 = 0; // Reset the received SIGUSR1 flag
+      pthread_mutex_unlock(&shutdown_mutex);
+      continue;
     }
+    pthread_mutex_unlock(&shutdown_mutex);
 
     char opcode;
     if(read_all(server_fd, &opcode, sizeof(char), NULL) == 0){
@@ -458,26 +569,21 @@ void *server_fifo_handler(){
 
     if(new_client_connection(NULL) == 1){
       fprintf(stderr, "Failed to create new client connection\n");
-      pcq_destroy(queue);
-      free(queue);
-      free(w_threads);
-      close(server_fd);
-      unlink(server_pipename);
+      server_exit(0);
+      return NULL;
     }
 
   }
-  pcq_destroy(queue);
-  free(queue);
-  free(w_threads);
-  close(server_fd);
-  unlink(server_pipename);
-  printf("Server FIFO handler terminated\n");
-  return NULL;
+
+  printf("Server FIFO handler terminated.\n"); // Print that the server FIFO handler has terminated
+  server_exit(0); // Exit the server
+  return NULL;  
 }
 
 
+
 int main(int argc, char** argv) {
-  if (argc < 4) {
+  if (argc < 4) { 
     write_str(STDERR_FILENO, "Usage: ");
     write_str(STDERR_FILENO, argv[0]);
     write_str(STDERR_FILENO, " <jobs_dir>");
@@ -491,7 +597,7 @@ int main(int argc, char** argv) {
   char* endptr;
   max_backups = strtoul(argv[3], &endptr, 10);
 
-  if (*endptr != '\0') {
+  if (*endptr != '\0') {  
     fprintf(stderr, "Invalid max_proc value\n");
     return 1;
   }
@@ -529,10 +635,19 @@ int main(int argc, char** argv) {
 
   // Create producer-consumer queue, and initialize worker threads
 
+  printf("Process ID: %d\n", getpid());
+
+  signal(SIGPIPE, SIG_IGN);
+
+  if (signal_handlers_init()) { 
+    fprintf(stderr, "Failed to set signal handlers\n");
+    return 1;
+  }
+
   queue = (pc_queue_t *)malloc(sizeof(pc_queue_t));
-  if (queue == NULL) {
+  if (queue == NULL) {  
     fprintf(stderr, "Failed to allocate memory for queue\n");
-    kvs_terminate();
+    kvs_terminate();  
     return 1;
   }
   if (pcq_create(queue, MAX_SESSION_COUNT) != 0) {
@@ -542,7 +657,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  w_threads = malloc(MAX_SESSION_COUNT * sizeof(pthread_t));
+  w_threads = malloc(MAX_SESSION_COUNT * sizeof(pthread_t));  
   if (w_threads == NULL) {
     fprintf(stderr, "Failed to allocate memory for worker threads\n");
     kvs_terminate();
@@ -552,9 +667,9 @@ int main(int argc, char** argv) {
   }
   if (workers_handler() != 0) {
     fprintf(stderr, "Failed to create worker threads\n");
-    kvs_terminate();
-    pcq_destroy(queue);
-    free(queue);
+    kvs_terminate();  
+    pcq_destroy(queue); 
+    free(queue);  
     free(w_threads);
     return 1;
   }
@@ -565,6 +680,9 @@ int main(int argc, char** argv) {
   if ((unlink(server_pipename) != 0 && errno != ENOENT) || mkfifo(server_pipename, 0777) < 0) {
     fprintf(stderr, "Failed to create server FIFO: %s\n", strerror(errno));
     kvs_terminate();
+    pcq_destroy(queue);
+    free(queue);
+    free(w_threads);
     return 1;
   }
   fprintf(stdout, "The server has been initialized with pipename: %s\n", server_pipename);
@@ -595,7 +713,7 @@ int main(int argc, char** argv) {
     active_backups--;
   }
 
-  kvs_terminate();
+  //kvs_terminate();
 
   return 0;
 }

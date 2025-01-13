@@ -48,15 +48,15 @@ int pcq_enqueue(pc_queue_t *queue, void *elem) {
   }
 
   // Wait for an empty slot
-  sem_wait(&queue->pcq_empty_slots);
+  sem_wait(&queue->pcq_empty_slots); 
 
   // Add the element to the buffer
   mutex_lock(&queue->pcq_tail_lock);
   queue->pcq_buffer[queue->pcq_tail] = elem;
-  queue->pcq_tail = (queue->pcq_tail + 1) % queue->pcq_capacity;
+  queue->pcq_tail = (queue->pcq_tail + 1) % queue->pcq_capacity;  // Update the tail
   mutex_unlock(&queue->pcq_tail_lock);
 
-  // Signal that a filled slot is available
+  // Signal that a spot has been filled
   sem_post(&queue->pcq_filled_slots);
 
   return 0;
@@ -73,7 +73,7 @@ void *pcq_dequeue(pc_queue_t *queue) {
   // Remove the element from the buffer
   mutex_lock(&queue->pcq_head_lock);
   void *elem = queue->pcq_buffer[queue->pcq_head];
-  queue->pcq_head = (queue->pcq_head + 1) % queue->pcq_capacity;
+  queue->pcq_head = (queue->pcq_head + 1) % queue->pcq_capacity;  // Update the head
   mutex_unlock(&queue->pcq_head_lock);
 
   // Signal that an empty slot is available
